@@ -144,6 +144,41 @@ def gen_answer(query):
 
     return answer
 
+def read_file_in_encoding(file_path):
+    encoding = detect_encoding(file_path)
+    with open(file_path, 'r',encoding=encoding) as f:
+        return f.read()
+
+def convert_code(file_path, target_language):
+    # st.info(f"Converting {file_name}...")
+    prompt = f"""<|system|>
+you are expert on programming
+please convert the code provided in the file to target language.
+<<SYS>>
+source code:`{read_file_in_encoding(file_path)}`
+target language:`{target_language}`
+<<SYS>>
+<|assistant|>
+answer:
+"""
+    answer = wx.watsonx_gen_stream(prompt, wx.GRANITE_3_8B_INSTRUCT)
+    return answer
+
+def build_code(file_name):
+    st.info(f"Building {file_name}...")
+    # Placeholder for code building functionality
+    pass
+
+def test_code(file_name):
+    st.info(f"Testing {file_name}...")
+    # Placeholder for code testing functionality
+    pass
+
+def revise_code(file_name):
+    st.info(f"Revising {file_name}...")
+    # Placeholder for code revision functionality
+    pass
+
 def process_uploaded_files(uploaded_files):
     if uploaded_files:
         all_files = []
@@ -216,15 +251,96 @@ def process_uploaded_files(uploaded_files):
                 with st.spinner("⏳ Processing files..."):
                     read_code_in_folder(temp_dir, summary_dict=summary_dict)
 
-            # Display unified summary table
+            # Display unified summary table with action buttons
             if summary_dict:
                 st.write("### 📊 File Processing Summary")
-                summary_list = list(summary_dict.values())
-                st.table(summary_list)
-                total_lines = sum(item['Lines'] for item in summary_list)
+                
+                # Add action buttons and language selector at the top
+                st.write("### Actions")
+                
+                # Add target language selector
+                target_language = st.selectbox(
+                    "Select target language for conversion",
+                    ["Python", "Java", "C++", "JavaScript", "TypeScript", "Go", "Rust", "C#"]
+                )
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    if st.button("Convert Selected"):
+                        # Add user action to chat history
+                        if "messages" not in st.session_state:
+                            st.session_state.messages = []
+                        
+                        selected_files = [file_name for file_name, file_info in summary_dict.items() 
+                                       if st.session_state.get(f"select_{file_name}", False)]
+                        
+                        if selected_files:
+                            user_message = f"Convert the following files to {target_language}: {', '.join(selected_files)}"
+                            st.session_state.messages.append({"role": "user", "content": user_message})
+
+                            for file_name, file_info in summary_dict.items():
+                                if st.session_state.get(f"select_{file_name}", False):
+                                    # Create a new expander for each file's conversion result
+                                    file_path = os.path.join(temp_dir, file_name)
+                                    response = ""
+                                    for part in convert_code(file_path, target_language):
+                                        response += part
+                                    st.session_state.messages.append({"role": "bot", "content": response})
+                            
+                
+                with col2:
+                    if st.button("Build Selected"):
+                        for file_name, file_info in summary_dict.items():
+                            if st.session_state.get(f"select_{file_name}", False):
+                                build_code(file_name)
+                
+                with col3:
+                    if st.button("Test Selected"):
+                        for file_name, file_info in summary_dict.items():
+                            if st.session_state.get(f"select_{file_name}", False):
+                                test_code(file_name)
+                
+                with col4:
+                    if st.button("Revise Selected"):
+                        for file_name, file_info in summary_dict.items():
+                            if st.session_state.get(f"select_{file_name}", False):
+                                revise_code(file_name)
+                
+                st.markdown("---")
+                
+                # Create columns for the table
+                col1, col2, col3, col4, col5, col6 = st.columns([1, 2, 1, 1, 1, 1])
+                
+                # Headers
+                col1.write("**Select**")
+                col2.write("**File**")
+                col3.write("**Source**")
+                col4.write("**Type**")
+                col5.write("**Lines**")
+                col6.write("**Status**")
+                
+                # Display each file with checkboxes
+                for file_name, file_info in summary_dict.items():
+                    # Initialize checkbox state in session state if not exists
+                    if f"select_{file_name}" not in st.session_state:
+                        st.session_state[f"select_{file_name}"] = False
+                    
+                    # Only show checkboxes for supported files
+                    if is_source_file(file_info['File']):
+                        col1.checkbox("", key=f"select_{file_name}")
+                    else:
+                        col1.write("")
+                    
+                    col2.write(file_info['File'])
+                    col3.write(file_info['Source'])
+                    col4.write(file_info['Type'])
+                    col5.write(str(file_info['Lines']))
+                    col6.write(file_info['Status'])
+                
+                total_lines = sum(item['Lines'] for item in summary_dict.values())
                 st.write(f"Total lines processed: {total_lines}")
             else:
-                st.warning("No valid files to process. Please upload C, Java, COBOL, or header files.")
+                st.warning("No valid files to process. Please upload C, Java, COBOL, or C++ files.")
     else:
         st.info("ℹ️ Upload files to begin", icon="ℹ️")
 
@@ -250,7 +366,7 @@ def chat_interface():
 
         st.session_state.prompt = prompt
 
-        with st.chat_message("assistant"):
+        with st.chat_message("bot"):
             response = st.write_stream(gen_answer(prompt))
         # response = gen_answer(prompt)
         st.session_state.messages.append({"role":"bot", "content":response})
@@ -270,7 +386,7 @@ def main():
     
     uploaded_files = st.sidebar.file_uploader(
         "Upload Files or Folders",
-        type=["c","h","java","cbl","cpp","hpp","zip"],  # We'll handle file type validation in the code
+        type=["c","h","java","cbl","cpp","hpp","zip"],
         accept_multiple_files=True,
         help="Only C, Java, COBOL, and header files are supported"
     )
