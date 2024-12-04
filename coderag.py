@@ -72,39 +72,35 @@ def is_source_file(filename):
     }
     return os.path.splitext(filename)[1].lower() in source_extensions
 
-def read_code_in_folder(folderpath, chunk_size=250, chunk_overlap=20):
+def read_code_in_folder(folderpath, chunk_size=250, chunk_overlap=20, summary_dict=None):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     docs = []
-    process_summary = []
 
     for root, _, files in os.walk(folderpath):
         for file_name in files:
             file_path = os.path.join(root, file_name)
+            base_name = os.path.basename(file_path)
+            if base_name not in summary_dict:
+                continue
+
             encoding = detect_encoding(file_path)
             try:
+                # Count lines in the file
+                with open(file_path, 'r', encoding=encoding) as f:
+                    line_count = sum(1 for _ in f)
+                
                 text = TextLoader(file_path, encoding=encoding).load()
                 chunks = text_splitter.split_documents(text)
                 docs += chunks
-                process_summary.append({
-                    'File': os.path.basename(file_path),
-                    'Type': os.path.splitext(file_path)[1].lower(),
-                    'Chunks': len(chunks),
+                summary_dict[base_name].update({
+                    'Lines': line_count,
                     'Status': '✅ Processed'
                 })
             except Exception as e:
-                process_summary.append({
-                    'File': os.path.basename(file_path),
-                    'Type': os.path.splitext(file_path)[1].lower(),
-                    'Chunks': 0,
+                summary_dict[base_name].update({
+                    'Lines': 0,
                     'Status': f'❌ Failed: {str(e)}'
                 })
-
-    # Display processing summary in a table
-    if process_summary:
-        st.write("### 📊 Processing Summary")
-        st.table(process_summary)
-        total_chunks = sum(item['Chunks'] for item in process_summary)
-        st.write(f"Total chunks indexed: {total_chunks}")
 
     URI = "./code_rag.db"
     vector_store = Milvus(
@@ -151,9 +147,8 @@ def gen_answer(query):
 def process_uploaded_files(uploaded_files):
     if uploaded_files:
         all_files = []
-        upload_summary = []
+        summary_dict = {}
         
-        # Create a temporary directory using system's temp directory
         with tempfile.TemporaryDirectory() as temp_dir:
             for uploaded_file in uploaded_files:
                 file_name = os.path.join(temp_dir, uploaded_file.name)
@@ -174,54 +169,62 @@ def process_uploaded_files(uploaded_files):
                                     if is_source_file(extracted_file):
                                         extracted_path = os.path.join(root, extracted_file)
                                         all_files.append(extracted_path)
-                                        upload_summary.append({
-                                            'File': os.path.basename(extracted_file),
+                                        summary_dict[extracted_file] = {
+                                            'File': extracted_file,
                                             'Source': uploaded_file.name,
                                             'Type': os.path.splitext(extracted_file)[1].lower(),
+                                            'Lines': 0,
                                             'Status': '📦 Extracted'
-                                        })
+                                        }
                                     else:
-                                        upload_summary.append({
-                                            'File': os.path.basename(extracted_file),
+                                        summary_dict[extracted_file] = {
+                                            'File': extracted_file,
                                             'Source': uploaded_file.name,
                                             'Type': os.path.splitext(extracted_file)[1].lower() or 'No ext',
+                                            'Lines': 0,
                                             'Status': '⚠️ Unsupported'
-                                        })
+                                        }
                     else:
                         if is_source_file(file_name):
                             all_files.append(file_name)
-                            upload_summary.append({
+                            summary_dict[uploaded_file.name] = {
                                 'File': uploaded_file.name,
                                 'Source': 'Direct',
                                 'Type': os.path.splitext(file_name)[1].lower(),
+                                'Lines': 0,
                                 'Status': '📄 Uploaded'
-                            })
+                            }
                         else:
-                            upload_summary.append({
+                            summary_dict[uploaded_file.name] = {
                                 'File': uploaded_file.name,
                                 'Source': 'Direct',
                                 'Type': os.path.splitext(file_name)[1].lower() or 'No ext',
+                                'Lines': 0,
                                 'Status': '⚠️ Unsupported'
-                            })
+                            }
                 except Exception as e:
-                    upload_summary.append({
+                    summary_dict[uploaded_file.name] = {
                         'File': uploaded_file.name,
                         'Source': 'Failed',
                         'Type': os.path.splitext(file_name)[1].lower() if os.path.splitext(file_name)[1] else 'No ext',
+                        'Lines': 0,
                         'Status': '❌ Error'
-                    })
+                    }
 
-            # Display upload summary in a table
-            if upload_summary:
-                st.write("### 📤 Upload Summary")
-                st.table(upload_summary)
-                
-                # Process valid files
-                if all_files:
-                    with st.spinner("⏳ Processing files..."):
-                        read_code_in_folder(temp_dir)
-                else:
-                    st.warning("No valid files to process. Please upload C, Java, COBOL, or header files.")
+            # Process valid files and update summary
+            if all_files:
+                with st.spinner("⏳ Processing files..."):
+                    read_code_in_folder(temp_dir, summary_dict=summary_dict)
+
+            # Display unified summary table
+            if summary_dict:
+                st.write("### 📊 File Processing Summary")
+                summary_list = list(summary_dict.values())
+                st.table(summary_list)
+                total_lines = sum(item['Lines'] for item in summary_list)
+                st.write(f"Total lines processed: {total_lines}")
+            else:
+                st.warning("No valid files to process. Please upload C, Java, COBOL, or header files.")
     else:
         st.info("ℹ️ Upload files to begin", icon="ℹ️")
 
