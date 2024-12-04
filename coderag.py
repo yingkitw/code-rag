@@ -10,6 +10,9 @@ from ibm_watsonx_ai.metanames import EmbedTextParamsMetaNames as EmbedParams
 from langchain_community.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_milvus import Milvus
+import time
+import shutil
+import tempfile
 
 warnings.filterwarnings("ignore")
 
@@ -109,7 +112,6 @@ def read_code_in_folder(folderpath, chunk_size=250, chunk_overlap=20):
         connection_args={"uri": URI},
         collection_name="code",
         auto_id=True,
-        drop_old=True
     )
     vector_store.add_documents(documents=docs)
 
@@ -139,6 +141,7 @@ def gen_answer(query):
         embedding,
         connection_args={"uri": URI},
         collection_name="code",
+        auto_id=True,
     )
     docs = vector_store.similarity_search(query)
     answer = querycode(docs, query)
@@ -149,77 +152,76 @@ def process_uploaded_files(uploaded_files):
     if uploaded_files:
         all_files = []
         upload_summary = []
-
-        os.makedirs("sample", exist_ok=True)
         
-        # Create a DataFrame-like structure for the summary
-        for uploaded_file in uploaded_files:
-            file_name = "sample/" + uploaded_file.name
-            try:
-                # Save the uploaded file locally
-                with open(file_name, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                
-                # Process ZIP files
-                if zipfile.is_zipfile(file_name):
-                    with zipfile.ZipFile(file_name, 'r') as zip_ref:
-                        extract_folder = f"extracted_{file_name.split('.')[0]}"
-                        zip_ref.extractall(extract_folder)
-                        
-                        # Add extracted files
-                        for root, _, files in os.walk(extract_folder):
-                            for extracted_file in files:
-                                if is_source_file(extracted_file):
-                                    extracted_path = os.path.join(root, extracted_file)
-                                    all_files.append(extracted_path)
-                                    upload_summary.append({
-                                        'File': os.path.basename(extracted_file),
-                                        'Source': uploaded_file.name,
-                                        'Type': os.path.splitext(extracted_file)[1].lower(),
-                                        'Status': '📦 Extracted'
-                                    })
-                                else:
-                                    upload_summary.append({
-                                        'File': os.path.basename(extracted_file),
-                                        'Source': uploaded_file.name,
-                                        'Type': os.path.splitext(extracted_file)[1].lower() or 'No ext',
-                                        'Status': '⚠️ Unsupported'
-                                    })
-                else:
-                    if is_source_file(file_name):
-                        all_files.append(file_name)
-                        upload_summary.append({
-                            'File': uploaded_file.name,
-                            'Source': 'Direct',
-                            'Type': os.path.splitext(file_name)[1].lower(),
-                            'Status': '📄 Uploaded'
-                        })
+        # Create a temporary directory using system's temp directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for uploaded_file in uploaded_files:
+                file_name = os.path.join(temp_dir, uploaded_file.name)
+                try:
+                    # Save the uploaded file locally
+                    with open(file_name, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    
+                    # Process ZIP files
+                    if zipfile.is_zipfile(file_name):
+                        with zipfile.ZipFile(file_name, 'r') as zip_ref:
+                            extract_folder = os.path.join(temp_dir, f"extracted_{uploaded_file.name.split('.')[0]}")
+                            zip_ref.extractall(extract_folder)
+                            
+                            # Add extracted files
+                            for root, _, files in os.walk(extract_folder):
+                                for extracted_file in files:
+                                    if is_source_file(extracted_file):
+                                        extracted_path = os.path.join(root, extracted_file)
+                                        all_files.append(extracted_path)
+                                        upload_summary.append({
+                                            'File': os.path.basename(extracted_file),
+                                            'Source': uploaded_file.name,
+                                            'Type': os.path.splitext(extracted_file)[1].lower(),
+                                            'Status': '📦 Extracted'
+                                        })
+                                    else:
+                                        upload_summary.append({
+                                            'File': os.path.basename(extracted_file),
+                                            'Source': uploaded_file.name,
+                                            'Type': os.path.splitext(extracted_file)[1].lower() or 'No ext',
+                                            'Status': '⚠️ Unsupported'
+                                        })
                     else:
-                        upload_summary.append({
-                            'File': uploaded_file.name,
-                            'Source': 'Direct',
-                            'Type': os.path.splitext(file_name)[1].lower() or 'No ext',
-                            'Status': '⚠️ Unsupported'
-                        })
-            except Exception as e:
-                upload_summary.append({
-                    'File': uploaded_file.name,
-                    'Source': 'Failed',
-                    'Type': os.path.splitext(file_name)[1].lower() if os.path.splitext(file_name)[1] else 'No ext',
-                    'Status': '❌ Error'
-                })
+                        if is_source_file(file_name):
+                            all_files.append(file_name)
+                            upload_summary.append({
+                                'File': uploaded_file.name,
+                                'Source': 'Direct',
+                                'Type': os.path.splitext(file_name)[1].lower(),
+                                'Status': '📄 Uploaded'
+                            })
+                        else:
+                            upload_summary.append({
+                                'File': uploaded_file.name,
+                                'Source': 'Direct',
+                                'Type': os.path.splitext(file_name)[1].lower() or 'No ext',
+                                'Status': '⚠️ Unsupported'
+                            })
+                except Exception as e:
+                    upload_summary.append({
+                        'File': uploaded_file.name,
+                        'Source': 'Failed',
+                        'Type': os.path.splitext(file_name)[1].lower() if os.path.splitext(file_name)[1] else 'No ext',
+                        'Status': '❌ Error'
+                    })
 
-        # Display upload summary in a table
-        if upload_summary:
-            st.write("### 📤 Upload Summary")
-            st.table(upload_summary)
-            
-            # Process valid files
-            if all_files:
-                with st.spinner("⏳ Processing files..."):
-                    read_code_in_folder("sample")
-            else:
-                st.warning("No valid files to process. Please upload C, Java, COBOL, or header files.")
+            # Display upload summary in a table
+            if upload_summary:
+                st.write("### 📤 Upload Summary")
+                st.table(upload_summary)
+                
+                # Process valid files
+                if all_files:
+                    with st.spinner("⏳ Processing files..."):
+                        read_code_in_folder(temp_dir)
+                else:
+                    st.warning("No valid files to process. Please upload C, Java, COBOL, or header files.")
     else:
         st.info("ℹ️ Upload files to begin", icon="ℹ️")
 
