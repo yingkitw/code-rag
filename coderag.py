@@ -136,7 +136,7 @@ def process_uploaded_files(uploaded_files):
         all_files = []
 
         for uploaded_file in uploaded_files:
-            file_name = uploaded_file.name
+            file_name = "sample/"+uploaded_file.name
             st.write(f"Processing file: {file_name}")
 
             # Save the uploaded file locally
